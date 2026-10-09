@@ -21,17 +21,17 @@ app.get('/api/users',wrap(async(_req,res)=>{await db();const users=await User.fi
 app.get('/api/transactions',wrap(async(_req,res)=>{await db();const id=res.locals.userId;const txs=await Transfer.find({$or:[{fromUserId:id},{toUserId:id}]}).sort({createdAt:-1,_id:-1}).limit(100).populate('fromUserId','name').populate('toUserId','name').lean();res.json(txs.map((t:any)=>({id:String(t._id),from:{id:String(t.fromUserId._id),name:t.fromUserId.name},to:{id:String(t.toUserId._id),name:t.toUserId.name},amount:t.amount,createdAt:t.createdAt})))}));
 app.post('/api/wallet/transfer',wrap(async(req,res)=>{
  await db();const id=res.locals.userId as string;const key=requireKey(req.header('Idempotency-Key'));const {toUserId,amount}=req.body||{};const fp=fingerprint(toUserId,amount);
- const previous=await RequestKey.findOne({senderId:id,key}).lean();const replay=checkReplay(previous,fp);if(replay)return res.status(201).json(replay);
+ const previous=await RequestKey.findOne({senderId:id,key}).lean();const replay=checkReplay(previous as {fingerprint:string;result:unknown}|null,fp);if(replay)return res.status(201).json(replay);
  validateTransfer(id,toUserId,amount,mongoose.isValidObjectId);
  const session=await mongoose.startSession();let result:unknown;
  try{await session.withTransaction(async()=>{
-  const existing=await RequestKey.findOne({senderId:id,key}).session(session).lean();const seen=checkReplay(existing,fp);if(seen){result=seen;return}
+  const existing=await RequestKey.findOne({senderId:id,key}).session(session).lean();const seen=checkReplay(existing as {fingerprint:string;result:unknown}|null,fp);if(seen){result=seen;return}
   if(!await User.exists({_id:toUserId}).session(session))throw new WalletError(404,'Receiver not found');
   const sender=await User.findOneAndUpdate({_id:id,balance:{$gte:amount}},{$inc:{balance:-amount}},{new:true,session});if(!sender)throw new WalletError(409,'Insufficient balance');
   await User.updateOne({_id:toUserId},{$inc:{balance:amount}},{session});
   const [tx]=await Transfer.create([{fromUserId:id,toUserId,amount}],{session});result={message:'Transfer successful',transactionId:String(tx.id),amount,balance:sender.balance};
   await RequestKey.create([{senderId:id,key,fingerprint:fp,result}],{session});
- });res.status(201).json(result)}catch(err:any){if(err.code===11000){const existing=await RequestKey.findOne({senderId:id,key}).lean();const replay=checkReplay(existing,fp);if(replay)return res.status(201).json(replay)}if(err instanceof WalletError)throw err;throw new WalletError(503,'Transfer uncertain; retry with SAME Idempotency-Key')}finally{await session.endSession()}
+ });res.status(201).json(result)}catch(err:any){if(err.code===11000){const existing=await RequestKey.findOne({senderId:id,key}).lean();const replay=checkReplay(existing as {fingerprint:string;result:unknown}|null,fp);if(replay)return res.status(201).json(replay)}if(err instanceof WalletError)throw err;throw new WalletError(503,'Transfer uncertain; retry with SAME Idempotency-Key')}finally{await session.endSession()}
 }));
 app.use((err:unknown,_req:Request,res:Response,_next:NextFunction)=>{if(err instanceof WalletError)return res.status(err.status).json({error:err.message});console.error(err);res.status(503).json({error:'Service unavailable'})});
 if(process.env.NODE_ENV!=='test' && !process.env.VERCEL){const port=Number(process.env.PORT||5000);app.listen(port,()=>console.log('Wallet API listening on '+port));}
