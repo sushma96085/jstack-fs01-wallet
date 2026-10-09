@@ -1,0 +1,20 @@
+import {describe,it,expect} from 'vitest';
+import {WalletError,validateTransfer,requireKey,fingerprint,checkReplay} from '../src/rules.js';
+const a='507f1f77bcf86cd799439011',b='507f1f77bcf86cd799439012';const valid=(s:string)=>/^[0-9a-f]{24}$/.test(s);
+describe('FS-01 transfer rules',()=>{
+ it('accepts minimum ₹1',()=>expect(()=>validateTransfer(a,b,100,valid)).not.toThrow());
+ it('accepts maximum ₹50,000',()=>expect(()=>validateTransfer(a,b,5000000,valid)).not.toThrow());
+ it.each([0,99,5000001,-100,100.1,NaN,Infinity,'500'])('rejects invalid amount %s',(amount)=>expect(()=>validateTransfer(a,b,amount,valid)).toThrow(WalletError));
+ it('rejects self transfer',()=>expect(()=>validateTransfer(a,a,100,valid)).toThrow('Cannot transfer to yourself'));
+ it('rejects invalid receiver',()=>expect(()=>validateTransfer(a,'not-id',100,valid)).toThrow('Invalid receiver'));
+ it('requires an idempotency key',()=>expect(()=>requireKey(undefined)).toThrow('Idempotency-Key'));
+ it('accepts a key',()=>expect(requireKey('unique-uuid')).toBe('unique-uuid'));
+ it('replays the original response for same key and payload',()=>{const fp=fingerprint(b,50000),result={transactionId:'t1',balance:950000};expect(checkReplay({fingerprint:fp,result},fingerprint(b,50000))).toEqual(result)});
+ it('rejects same key with different amount',()=>expect(()=>checkReplay({fingerprint:fingerprint(b,50000),result:{}},fingerprint(b,60000))).toThrow('different payload'));
+ it('rejects same key with different recipient',()=>expect(()=>checkReplay({fingerprint:fingerprint(b,50000),result:{}},fingerprint(a,50000))).toThrow('different payload'));
+ it('rejects missing key as 400',()=>{try{requireKey('')}catch(e){expect((e as WalletError).status).toBe(400)}});
+ it('rejects excessively long key',()=>expect(()=>requireKey('x'.repeat(201))).toThrow(WalletError));
+ it('rejects decimal paise',()=>expect(()=>validateTransfer(a,b,100.5,valid)).toThrow(WalletError));
+ it('rejects negative amounts',()=>expect(()=>validateTransfer(a,b,-100,valid)).toThrow(WalletError));
+ it('returns null for new idempotency key',()=>expect(checkReplay(null,'new')).toBeNull());
+});

@@ -1,0 +1,20 @@
+// Dependency-free unit tests: Node 22+ with --experimental-strip-types.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {WalletError,validateTransfer,requireKey,fingerprint,checkReplay} from '../src/rules.ts';
+const a='507f1f77bcf86cd799439011', b='507f1f77bcf86cd799439012';
+const valid=s=>/^[0-9a-f]{24}$/.test(s);
+for(const amount of [100,101,50000,5000000]) test(`valid amount ${amount}`,()=>assert.doesNotThrow(()=>validateTransfer(a,b,amount,valid)));
+for(const amount of [0,99,5000001,-100,100.1,NaN,Infinity,'500',null,undefined,1e100]) test(`invalid amount ${String(amount)}`,()=>assert.throws(()=>validateTransfer(a,b,amount,valid),WalletError));
+test('self transfer rejected',()=>assert.throws(()=>validateTransfer(a,a,100,valid),/yourself/));
+test('bad recipient rejected',()=>assert.throws(()=>validateTransfer(a,'bad',100,valid),/Invalid receiver/));
+test('missing idempotency key rejected',()=>assert.throws(()=>requireKey(undefined),e=>e.status===400));
+test('empty key rejected',()=>assert.throws(()=>requireKey('   '),e=>e.status===400));
+test('too-long key rejected',()=>assert.throws(()=>requireKey('x'.repeat(201)),e=>e.status===400));
+test('valid key accepted',()=>assert.equal(requireKey('uuid-123'),'uuid-123'));
+test('same fingerprint stable',()=>assert.equal(fingerprint(b,100),fingerprint(b,100)));
+test('different amount fingerprint differs',()=>assert.notEqual(fingerprint(b,100),fingerprint(b,101)));
+test('different recipient fingerprint differs',()=>assert.notEqual(fingerprint(b,100),fingerprint(a,100)));
+test('new key has no replay',()=>assert.equal(checkReplay(null,fingerprint(b,100)),null));
+test('same key returns original result',()=>{const fp=fingerprint(b,100);const result={transactionId:'tx1',balance:999900};assert.deepEqual(checkReplay({fingerprint:fp,result},fp),result)});
+test('key reused with different payload rejected',()=>assert.throws(()=>checkReplay({fingerprint:fingerprint(b,100),result:{}},fingerprint(b,101)),e=>e.status===409));
